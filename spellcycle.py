@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -102,6 +103,7 @@ class TowerBar:
         self.alive = True
         self._recent = deque(maxlen=window)
         self._misses = 0
+        self.history = deque(maxlen=300)   # (time, hp), for scoring impacts
 
     @property
     def hp(self) -> float:
@@ -167,6 +169,48 @@ class TowerBar:
         if run == 0:
             return None
         return min(run, len(filled)) / len(filled)
+
+
+# --------------------------------------------------------------------------
+# Watching the arena with the trained detector
+# --------------------------------------------------------------------------
+
+
+class SpellWatcher:
+    """Finds spells in the arena using the fine-tuned YOLOv8n detector.
+
+    This is the one part of the program a fixed rectangle cannot do. The hand
+    and the health bars never move, so template matching and a fixed region
+    are the right tools there. A spell in flight has no fixed position, no
+    fixed scale, and crosses whatever happens to be on the board, so it gets
+    a detector trained on it. See tools/train_model.py.
+
+    Catching the impact also lets the program check its own arithmetic: when
+    a blast lands near a tower, the health drop that follows is compared with
+    the per-cast damage the counter was promising.
+    """
+
+    FLIGHT, IMPACT = "spell_in_flight", "spell_impact"
+
+    def __init__(self, weights: Path, conf: float):
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            sys.exit("ERROR: ultralytics is not installed but --model was "
+                     "given. pip install -r requirements.txt")
+        os.environ.setdefault("YOLO_VERBOSE", "False")
+        self.model = YOLO(str(weights))
+        self.conf = conf
+        self.names = self.model.names
+
+    def detect(self, frame):
+        """-> list of (class_name, (x1, y1, x2, y2), confidence)."""
+        res = self.model.predict(frame, conf=self.conf, verbose=False)[0]
+        out = []
+        for b in res.boxes:
+            xy = [int(v) for v in b.xyxy[0].tolist()]
+            out.append((self.names[int(b.cls)], tuple(xy), float(b.conf)))
+        return out
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +286,22 @@ FONT = cv2.FONT_HERSHEY_DUPLEX
 GOLD = (60, 200, 255)
 
 
+DET_COLOURS = {"spell_in_flight": (255, 190, 60), "spell_impact": (80, 90, 255)}
+
+
+def draw_detection(frame, name, box, conf, s):
+    x1, y1, x2, y2 = box
+    col = DET_COLOURS.get(name, (200, 200, 200))
+    cv2.rectangle(frame, (x1, y1), (x2, y2), col, max(1, int(2 * s)))
+    tag = f"{'IN FLIGHT' if name == 'spell_in_flight' else 'IMPACT'} {conf:.0%}"
+    (tw, th), _ = cv2.getTextSize(tag, FONT, 0.34 * s, 1)
+    ty = max(th + int(3 * s), y1 - int(3 * s))
+    cv2.rectangle(frame, (x1, ty - th - int(3 * s)),
+                  (x1 + tw + int(5 * s), ty + int(2 * s)), col, -1)
+    cv2.putText(frame, tag, (x1 + int(2 * s), ty), FONT, 0.34 * s,
+                (20, 18, 16), 1, cv2.LINE_AA)
+
+
 def draw_spell(frame, box, spell, casts, s):
     x1, y1, x2, y2 = box
     cv2.rectangle(frame, (x1, y1), (x2, y2), GOLD, max(1, int(2 * s)))
@@ -295,6 +355,12 @@ def main():
     p.add_argument("--cards", type=Path, default=ROOT / "cards")
     p.add_argument("--threshold", type=float, default=0.78,
                    help="card match score to accept a spell (default 0.78). A real spell scores about 0.86-0.92; the best false positive seen was a greyed-out post-match card at 0.72.")
+    p.add_argument("--model", type=Path, default=ROOT / "models" / "spell_yolov8n.pt",
+                   help="trained spell detector weights")
+    p.add_argument("--spell-conf", type=float, default=0.35,
+                   help="detector confidence threshold (default 0.35)")
+    p.add_argument("--no-model", action="store_true",
+                   help="skip the arena detector, hand and health only")
     p.add_argument("--every", type=int, default=5,
                    help="re-read the hand every N frames (default 5)")
     p.add_argument("--outdir", type=Path, default=ROOT / "output")
@@ -318,6 +384,16 @@ def main():
     palette = {k: np.array(layout[v], dtype=np.uint8) for k, v in
                (("lo1", "red_lo1"), ("hi1", "red_hi1"),
                 ("lo2", "red_lo2"), ("hi2", "red_hi2"))}
+
+    watcher = None
+    if not args.no_model:
+        if args.model.exists():
+            watcher = SpellWatcher(args.model, args.spell_conf)
+        else:
+            print(f"  note: no detector at {args.model}, arena watching off.\n"
+                  "        Train one with:\n"
+                  "            python tools/build_dataset.py <video>\n"
+                  "            python tools/train_model.py")
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
@@ -363,7 +439,11 @@ def main():
 
     frames = 0
     hand = []
+    dets = []
     last_line = None
+    impact_on = False
+    pending = []
+    casts_seen = 0
 
     try:
         while True:
@@ -380,11 +460,47 @@ def main():
 
             for tower in towers:
                 tower.update(frame, palette)
+                tower.history.append((t, tower.hp))
             alive = [tw for tw in towers if tw.alive]
             weakest = min(alive, key=lambda tw: tw.hp) if alive else None
 
             if frames % args.every == 0:
                 hand = hand_reader.read(frame, slots)
+
+            if watcher and frames % args.every == 0:
+                dets = watcher.detect(frame)
+
+            for name, box, conf in dets:
+                draw_detection(frame, name, box, conf, s)
+
+            # A blast is one cast. Record the tower's health just before it
+            # and again once the damage has registered, so the program can
+            # check the number it was promising against what actually landed.
+            # Only blasts on the enemy half count. A spell landing on your own
+            # tower is still a spell, but it tells you nothing about the
+            # number this program is drawing on the enemy's health.
+            hit = [d for d in dets if d[0] == SpellWatcher.IMPACT
+                   and (d[1][1] + d[1][3]) / 2 < h * 0.47]
+            if hit and not impact_on:
+                impact_on = True
+                casts_seen += 1
+                bx = (hit[0][1][0] + hit[0][1][2]) / 2
+                side = towers[0] if bx < w / 2 else towers[-1]
+                before = next((hp for ts, hp in reversed(side.history)
+                               if ts <= t - 0.4), side.hp)
+                pending.append([t, side, before])
+                print(f"  [{t:7.2f}s] cast #{casts_seen} landed on "
+                      f"{side.name.lower()} tower")
+            elif not hit:
+                impact_on = False
+
+            for item in pending[:]:
+                if t - item[0] >= 1.6:
+                    _, side, before = item
+                    drop = before - side.hp
+                    print(f"  [{t:7.2f}s]   that cast took off "
+                          f"{int(round(drop))} HP")
+                    pending.remove(item)
 
             for _slot, spell, box, _score in hand:
                 casts = book.casts_needed(spell, weakest.hp) if weakest else None

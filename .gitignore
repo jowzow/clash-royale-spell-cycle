@@ -7,5 +7,16 @@ __pycache__/
 *.mp4
 !output/videoplayback_spellcycle.mp4
 
+# generated training data and run logs: rebuild with tools/build_dataset.py
+dataset/
+runs/
+output/orange_prior.npy
+output/label_check*.png
+output/flight_strip.png
+output/scan_candidates.png
+
+# the trained weights ARE committed so the repo runs without retraining
+!models/spell_yolov8n.pt
+
 desktop.ini
 Thumbs.db

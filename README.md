@@ -25,21 +25,32 @@ Full annotated clip: [`output/videoplayback_spellcycle.mp4`](output/videoplaybac
 
 ## What it detects
 
-Two things, both in the game's heads-up display rather than in the arena:
+Three things:
 
-1. **The enemy princess towers' health**, from the red fill of their health bars.
-2. **Which of your four hand slots hold a damaging spell**, from the card art.
+1. **Spells in the arena** — the projectile in flight and the blast where it
+   lands — with a YOLOv8n detector fine-tuned on this game.
+2. **The enemy princess towers' health**, from the red fill of their health bars.
+3. **Which of your four hand slots hold a damaging spell**, from the card art.
 
 Non-spell cards are deliberately ignored. A Goblin Gang has no guaranteed
 tower damage, so no count can be put on it.
 
 ## Approach, and why
 
-**No neural network.** Both targets live in a fixed, rendered user interface,
-not in a photograph. A YOLO-style detector would be a worse tool here: it
-would need training data, and it would be less accurate than reading pixels
-whose exact position and colour the game guarantees. Two classical methods do
-the job with OpenCV alone, which is why `requirements.txt` is two lines.
+**The right tool depends on whether the thing moves**, and this project has
+both kinds of target, so it uses both kinds of method.
+
+The hand and the health bars never move. They sit at fixed positions in a
+rendered interface whose colours and coordinates the game guarantees. A
+learned detector would be strictly worse there: more machinery, more failure
+modes, and less accuracy than simply reading the pixels. So those use template
+matching and a fixed rectangle.
+
+A spell in flight is the opposite. It has no fixed position, no fixed scale,
+and it crosses whatever happens to be on the board at the time. No rectangle
+and no colour rule can find it, because the arena is full of permanently
+orange furniture: bridge gates, king crowns, every gold level badge. That is
+what the model is for, and the "The model" section below covers it.
 
 **Hand: template matching against the official card art.** The four slots sit
 at fixed screen positions, so each slot is matched against all seven spell
@@ -65,6 +76,62 @@ templates from values I read by eye and tested them on held-out frames, and
 so I measured the bar instead. Fitted against four hand-read health values,
 the bar lands within 0.3%.
 
+## The model
+
+**YOLOv8n, fine-tuned from COCO weights on frames cut from this video.** Two
+classes: `spell_in_flight` and `spell_impact`. Starting from pretrained
+weights rather than from scratch matters — a few hundred frames is nowhere
+near enough to learn edges and blobs from nothing, but it is plenty to
+re-point a backbone that already has them at one new object.
+
+### Getting labels without labelling by hand
+
+Hand-annotating thousands of frames was not realistic, so the labels come
+from a two-stage trick that `tools/build_dataset.py` implements:
+
+1. **An impact is easy to find.** A spell blast is far larger than any gold
+   badge in the arena, so a strict area threshold catches it. That gives one
+   reliable anchor per cast: 28 events across 23 minutes.
+2. **A projectile is hard to find, but it has to arrive somewhere.** Searching
+   all 42,284 frames for a small orange ball is hopeless. Searching only the
+   one second before a known blast, and only near where that blast happened,
+   is easy. An impossible global search becomes a trivial local one.
+
+The first version of this labelled bridges as fireballs. The arena is full of
+permanently orange furniture, and colour cannot tell a bridge gate from a
+projectile. The fix is a **static-orange prior**: sample 798 frames across the
+video, measure how often each pixel is orange, and refuse to label anything in
+a pixel that is orange most of the time. A spell is by definition transient.
+That one filter removed 212 bad labels, and every box in the verification
+montage after it was a genuine projectile.
+
+![Where orange is permanent](output/orange_prior.png)
+
+Bright areas are furniture the labeller must ignore: the two bridge gates, the
+king crowns, every level badge, the cards in hand.
+
+### Training
+
+| | |
+|---|---|
+| Base weights | `yolov8n.pt`, COCO-pretrained |
+| Classes | `spell_in_flight`, `spell_impact` |
+| Source | 28 cast events across 23 minutes of play |
+| Train | 915 images: 465 in-flight, 167 impact, 283 negatives |
+| Validation | 333 images: 163 in-flight, 53 impact, 117 negatives |
+| Epochs | 20, CPU only |
+| Image size | 512 long side, rectangular batches |
+
+**Negatives matter as much as positives.** 400 frames with gold badges, king
+crowns and fire-effect troops but no spell are included on purpose. Without
+them the model learns "orange means spell" and you have trained the colour
+rule you were trying to replace.
+
+**The split holds out whole events, never single frames.** Consecutive frames
+of one cast are near-duplicates; splitting at random would leak them across
+train and validation and make the score meaningless. All 30 frames of a cast
+go to the same side of the split.
+
 ## How the code processes the video
 
 `spellcycle.py` runs one loop per frame:
@@ -76,12 +143,19 @@ the bar lands within 0.3%.
    not a zero-health target, it is removed from the running.
 4. **Read the hand** every fifth frame, since a hand only changes when a card
    is played.
-5. **Do the arithmetic.** `ceil(health / crown tower damage)`, which always
+5. **Run the detector** on the same fifth frame, giving any spell in flight or
+   blast in the arena.
+6. **Do the arithmetic.** `ceil(health / crown tower damage)`, which always
    rounds up, because a tower on 1 health still needs a whole cast.
-6. **Draw** a box on each spell with its count, and nothing else. The health
-   figures stay off the picture on purpose: they are an estimate good to about
-   a bar pixel, which is accurate enough to pick a cast count but not
-   accurate enough to put on screen as if it were the game's own number.
+7. **Score the cast.** When a blast appears, note which side it landed on,
+   take the health from just before it, and compare it with the health 1.6
+   seconds later. That is the program marking its own homework: it has been
+   claiming a Fireball takes 159 off, and now it can say what one actually took.
+8. **Draw** the spell boxes with their counts, and the detector's boxes on the
+   projectile and the blast. The health figures stay off the picture on
+   purpose: they are an estimate good to about a bar pixel, accurate enough to
+   pick a cast count but not accurate enough to show as if it were the game's
+   own number.
 
 ### Keeping the health reading honest
 
@@ -155,6 +229,11 @@ two detections into one actionable number:
 - **Survives a messy video.** The three rules under "Keeping the health
   reading honest" above are the real work: a bar hidden by a troop or a spell
   animation holds its last value instead of collapsing the count.
+- **Marks its own homework.** The detector's impact class turns every cast
+  into a measurement. The program records the tower's health before the blast
+  and after it, and prints what the cast actually took off, next to the
+  per-cast damage it had been promising. A counter that cannot be checked is
+  just a number on a screen.
 - **Logs every change.** A line is printed whenever the count changes, so the
   run is auditable without scrubbing the video:
 
@@ -207,6 +286,11 @@ python tools/test_math.py
 
 # rebuild the damage table after a balance patch
 python tools/build_spell_table.py
+
+# retrain the spell detector from scratch (weights are committed, so this
+# is only needed for a different game version or a new video)
+python tools/build_dataset.py videoplayback.mp4
+python tools/train_model.py
 ```
 
 Output lands in `output/` as an annotated MP4.
@@ -278,6 +362,25 @@ towers and unknown spells return nothing instead of crashing.
   is rare enough that the robustness it buys everywhere else is worth it.
 - **One layout per recording.** A different aspect ratio needs the regions
   re-measured.
+
+Model-specific:
+
+- **The labels are weakly supervised, so the in-flight class is noisy.**
+  Candidates come from the second before a confirmed blast, which is mostly
+  but not only the incoming projectile; a Firecracker's sparks near the same
+  spot can be swept in. Every box in the verification montage was a genuine
+  fire projectile, but "fire projectile" is a slightly wider class than
+  "spell".
+- **It does not say which spell it is.** One class covers all of them.
+  Identity comes from the hand instead, which is already detected, so the two
+  halves could be joined: a Fireball leaving the hand plus a blast arriving is
+  a Fireball cast.
+- **Trained on 23 minutes of one recording**, so it has seen one arena skin,
+  one resolution and one set of card levels. A different arena would need the
+  dataset rebuilt, which is one command.
+- **CPU-trained and deliberately small.** yolov8n at 512 on rectangular
+  batches, chosen so the whole thing retrains in minutes on a laptop rather
+  than needing a GPU.
 
 ## What I would add next
 
