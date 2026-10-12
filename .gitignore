@@ -15,7 +15,9 @@ output/label_check*.png
 output/flight_strip.png
 output/scan_candidates.png
 
-# the trained weights ARE committed so the repo runs without retraining
+# YOLO weights. The COCO base downloads itself on first train, so it is not
+# worth committing; the fine-tuned detector is, so the repo runs as cloned.
+*.pt
 !models/spell_yolov8n.pt
 
 desktop.ini
