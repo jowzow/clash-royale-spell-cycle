@@ -147,10 +147,12 @@ go to the same side of the split.
    blast in the arena.
 6. **Do the arithmetic.** `ceil(health / crown tower damage)`, which always
    rounds up, because a tower on 1 health still needs a whole cast.
-7. **Score the cast.** When a blast appears, note which side it landed on,
-   take the health from just before it, and compare it with the health 1.6
-   seconds later. That is the program marking its own homework: it has been
-   claiming a Fireball takes 159 off, and now it can say what one actually took.
+7. **Score the impact.** When a blast appears on the enemy half, note which
+   tower it landed on and how much health that tower loses over the next 1.6
+   seconds. This is reported as health lost in a window, not as the spell's
+   damage, because anything else hitting the tower at the same moment is
+   counted too. It is a sanity check on the counter, not a measurement of the
+   spell in isolation.
 8. **Draw** the spell boxes with their counts, and the detector's boxes on the
    projectile and the blast. The health figures stay off the picture on
    purpose: they are an estimate good to about a bar pixel, accurate enough to
@@ -229,11 +231,11 @@ two detections into one actionable number:
 - **Survives a messy video.** The three rules under "Keeping the health
   reading honest" above are the real work: a bar hidden by a troop or a spell
   animation holds its last value instead of collapsing the count.
-- **Marks its own homework.** The detector's impact class turns every cast
-  into a measurement. The program records the tower's health before the blast
-  and after it, and prints what the cast actually took off, next to the
-  per-cast damage it had been promising. A counter that cannot be checked is
-  just a number on a screen.
+- **Watches casts land.** The detector's impact class turns every blast on the
+  enemy half into an event: which tower it hit, and how much health that tower
+  lost afterwards. That window catches any troop damage landing at the same
+  time, so it is a sanity check rather than a clean per-spell measurement, and
+  the output says so.
 - **Logs every change.** A line is printed whenever the count changes, so the
   run is auditable without scrubbing the video:
 
@@ -381,6 +383,10 @@ Model-specific:
 - **CPU-trained and deliberately small.** yolov8n at 512 on rectangular
   batches, chosen so the whole thing retrains in minutes on a laptop rather
   than needing a GPU.
+- **The post-impact health drop is not the spell's damage.** It is everything
+  the tower lost in that 1.6 second window, troops included. Isolating the
+  spell would mean knowing what else was attacking, which this program does
+  not track.
 
 ## What I would add next
 

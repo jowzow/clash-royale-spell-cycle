@@ -104,6 +104,10 @@ class TowerBar:
         self._recent = deque(maxlen=window)
         self._misses = 0
         self.history = deque(maxlen=300)   # (time, hp), for scoring impacts
+        # Until the bar has actually been read once, self.fraction is just the
+        # starting assumption of full health. Anything derived from it before
+        # then is fiction, which is what `seen` guards.
+        self.seen = False
 
     @property
     def hp(self) -> float:
@@ -120,6 +124,7 @@ class TowerBar:
             return
 
         self._misses = 0
+        self.seen = True
         self._recent.append(reading)
 
         # Anything covering the bar can only make the red run look SHORTER
@@ -486,10 +491,11 @@ def main():
                 casts_seen += 1
                 bx = (hit[0][1][0] + hit[0][1][2]) / 2
                 side = towers[0] if bx < w / 2 else towers[-1]
-                before = next((hp for ts, hp in reversed(side.history)
-                               if ts <= t - 0.4), side.hp)
+                before = (next((hp for ts, hp in reversed(side.history)
+                                if ts <= t - 0.4), side.hp)
+                          if side.seen else None)
                 pending.append([t, side, before])
-                print(f"  [{t:7.2f}s] cast #{casts_seen} landed on "
+                print(f"  [{t:7.2f}s] spell impact #{casts_seen} on the "
                       f"{side.name.lower()} tower")
             elif not hit:
                 impact_on = False
@@ -497,9 +503,19 @@ def main():
             for item in pending[:]:
                 if t - item[0] >= 1.6:
                     _, side, before = item
-                    drop = before - side.hp
-                    print(f"  [{t:7.2f}s]   that cast took off "
-                          f"{int(round(drop))} HP")
+                    if before is None:
+                        print(f"  [{t:7.2f}s]   not measurable, that tower's "
+                              "health was not established yet")
+                    elif not side.alive:
+                        print(f"  [{t:7.2f}s]   {side.name.lower()} tower "
+                              "went down")
+                    else:
+                        # Deliberately not called "the spell's damage": this
+                        # is every point the tower lost in the window, so any
+                        # troop hitting it at the same time is counted too.
+                        print(f"  [{t:7.2f}s]   {side.name.lower()} tower lost "
+                              f"{int(round(before - side.hp))} HP over the "
+                              "next 1.6s")
                     pending.remove(item)
 
             for _slot, spell, box, _score in hand:
