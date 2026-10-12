@@ -1,9 +1,15 @@
 # Spell Cycle Counter dependencies.
 #
-# Verified on Windows 11 / Python 3.12.1 with opencv-python 5.0.0.93 and
-# numpy 2.5.4. No deep learning framework is needed: the hand is read by
-# template matching against the official card art and the tower health is
-# read off the health bar, both plain OpenCV.
+# Verified on Windows 11 / Python 3.12.1 with opencv-python 5.0.0.93,
+# numpy 2.5.4, ultralytics 8.4.175 and torch 2.14.1 (CPU build).
 
+# The arena spell detector. Pulls in torch and torchvision, so expect
+# roughly 1 GB of downloads on a clean install. Everything except the
+# detector runs without it, via --no-model.
+ultralytics>=8.3,<9
+
+# Video decoding, the health bar reader, the hand template matcher and all
+# the drawing. Listed explicitly rather than relying on ultralytics to pull
+# it in, since the classical half of the program is built on it.
 opencv-python>=4.8
 numpy>=1.24
