@@ -1,0 +1,19 @@
+{
+  "_comment": "On-screen regions, as fractions of frame width/height: [x1, y1, x2, y2]. These are PLACEHOLDERS for a portrait phone recording and must be tuned to your video. Run `python tools/inspect_frame.py input/<video> --grid`, read the percentages off the grid, then copy this file to data/layout.json and edit.",
+
+  "_hand_comment": "The strip holding your four cards, along the bottom.",
+  "hand": [0.20, 0.80, 1.00, 0.99],
+
+  "_towers_comment": "Each enemy health bar, tight to the bar itself: just the coloured strip, no border, no number. Left and right are the princess towers, king is the middle one at the top.",
+  "enemy_towers": {
+    "left":  [0.13, 0.20, 0.28, 0.225],
+    "right": [0.72, 0.20, 0.87, 0.225],
+    "king":  [0.42, 0.10, 0.58, 0.125]
+  },
+
+  "_colour_comment": "HSV bounds for the enemy bar colour. OpenCV hue runs 0-179, so red needs two ranges, one at each end. Widen the saturation/value floors if bars read as empty.",
+  "red_lo1": [0, 110, 80],
+  "red_hi1": [10, 255, 255],
+  "red_lo2": [168, 110, 80],
+  "red_hi2": [179, 255, 255]
+}

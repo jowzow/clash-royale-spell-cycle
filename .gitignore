@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# gameplay recordings are large; keep them out of git
+*.mp4
+!output/videoplayback_spellcycle.mp4
+
+desktop.ini
+Thumbs.db

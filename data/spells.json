@@ -1,0 +1,171 @@
+{
+  "_source": "https://royaleapi.github.io/cr-api-data/json/cards_stats.json",
+  "_generated": "2026-10-12",
+  "_balance": "Reflects the June 2026 and September 2026 spell patches.",
+  "_readme": "Crown tower damage only. These are NOT area damage values.",
+  "_excluded": {
+    "Poison": "damage over time, does not reduce to a cast count",
+    "Earthquake": "damage over time, does not reduce to a cast count",
+    "Tornado": "deals no meaningful crown tower damage"
+  },
+  "spells": {
+    "Rocket": {
+      "elixir": 6,
+      "rarity": "Rare",
+      "min_level": 3,
+      "crown_tower_damage": {
+        "3": 162,
+        "4": 178,
+        "5": 196,
+        "6": 215,
+        "7": 236,
+        "8": 259,
+        "9": 285,
+        "10": 312,
+        "11": 343,
+        "12": 377,
+        "13": 414,
+        "14": 455,
+        "15": 500
+      },
+      "area_damage_level_11": 1484,
+      "verified": true,
+      "note": "June 2026: -8% crown tower damage"
+    },
+    "Fireball": {
+      "elixir": 4,
+      "rarity": "Rare",
+      "min_level": 3,
+      "crown_tower_damage": {
+        "3": 75,
+        "4": 82,
+        "5": 91,
+        "6": 100,
+        "7": 109,
+        "8": 120,
+        "9": 132,
+        "10": 145,
+        "11": 159,
+        "12": 175,
+        "13": 192,
+        "14": 211,
+        "15": 232
+      },
+      "area_damage_level_11": 689,
+      "verified": true,
+      "note": "June 2026 -17%, then September 2026 again"
+    },
+    "Lightning": {
+      "elixir": 6,
+      "rarity": "Epic",
+      "min_level": 6,
+      "crown_tower_damage": {
+        "6": 184,
+        "7": 203,
+        "8": 223,
+        "9": 245,
+        "10": 269,
+        "11": 295,
+        "12": 324,
+        "13": 356,
+        "14": 391,
+        "15": 429
+      },
+      "area_damage_level_11": 1056,
+      "verified": false,
+      "note": "June 2026: -7% applied to 317"
+    },
+    "Arrows": {
+      "elixir": 3,
+      "rarity": "Common",
+      "min_level": 1,
+      "crown_tower_damage": {
+        "1": 12,
+        "2": 13,
+        "3": 14,
+        "4": 15,
+        "5": 17,
+        "6": 19,
+        "7": 21,
+        "8": 23,
+        "9": 25,
+        "10": 27,
+        "11": 30,
+        "12": 33,
+        "13": 36,
+        "14": 40,
+        "15": 44
+      },
+      "area_damage_level_11": 122,
+      "verified": false,
+      "note": "June 2026: -19% applied to 37"
+    },
+    "The Log": {
+      "elixir": 2,
+      "rarity": "Legendary",
+      "min_level": 9,
+      "crown_tower_damage": {
+        "9": 41,
+        "10": 45,
+        "11": 49,
+        "12": 54,
+        "13": 59,
+        "14": 65,
+        "15": 71
+      },
+      "area_damage_level_11": 290,
+      "verified": false,
+      "note": "June 2026: -15% applied to 58"
+    },
+    "Zap": {
+      "elixir": 2,
+      "rarity": "Common",
+      "min_level": 1,
+      "crown_tower_damage": {
+        "1": 19,
+        "2": 20,
+        "3": 22,
+        "4": 25,
+        "5": 27,
+        "6": 30,
+        "7": 33,
+        "8": 36,
+        "9": 40,
+        "10": 44,
+        "11": 48,
+        "12": 52,
+        "13": 58,
+        "14": 64,
+        "15": 70
+      },
+      "area_damage_level_11": 192,
+      "verified": false,
+      "note": "June 2026: -17% applied to 58"
+    },
+    "Giant Snowball": {
+      "elixir": 2,
+      "rarity": "Common",
+      "min_level": 1,
+      "crown_tower_damage": {
+        "1": 19,
+        "2": 20,
+        "3": 22,
+        "4": 25,
+        "5": 27,
+        "6": 30,
+        "7": 33,
+        "8": 36,
+        "9": 40,
+        "10": 44,
+        "11": 48,
+        "12": 52,
+        "13": 58,
+        "14": 64,
+        "15": 70
+      },
+      "area_damage_level_11": 192,
+      "verified": false,
+      "note": "June 2026: -17% applied to 58"
+    }
+  }
+}

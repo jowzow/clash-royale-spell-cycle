@@ -1,0 +1,9 @@
+# Spell Cycle Counter dependencies.
+#
+# Verified on Windows 11 / Python 3.12.1 with opencv-python 5.0.0.93 and
+# numpy 2.5.4. No deep learning framework is needed: the hand is read by
+# template matching against the official card art and the tower health is
+# read off the health bar, both plain OpenCV.
+
+opencv-python>=4.8
+numpy>=1.24
