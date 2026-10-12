@@ -14,12 +14,12 @@ casts of that spell finish off the weaker tower.
 
 ![The counter running on a real match](output/demo.gif)
 
-The Fireball in hand is boxed and labelled. The count ticks down as the tower
-takes damage, because a level 11 Fireball does 159 to a crown tower and the
-tower has less health every time it gets hit.
+Nine Fireballs would finish that tower, so the card in hand is boxed and
+labelled 9. Watch the clip through: the spell gets cast, the detector picks
+the projectile up in flight, and then tags the blast where it lands.
 
 Full annotated clip: [`output/videoplayback_spellcycle.mp4`](output/videoplayback_spellcycle.mp4)
-(85 seconds, 2548 frames). Single frame: [`output/demo_frame.png`](output/demo_frame.png).
+(54 seconds, 1619 frames). Single frame: [`output/demo_frame.png`](output/demo_frame.png).
 
 ---
 
@@ -132,6 +132,34 @@ of one cast are near-duplicates; splitting at random would leak them across
 train and validation and make the score meaningless. All 30 frames of a cast
 go to the same side of the split.
 
+### Results
+
+On the held-out cast events, which the model never saw in training:
+
+| Class | AP50 | Precision | Recall |
+|---|---|---|---|
+| `spell_impact` | 0.986 | 0.919 | 0.981 |
+| `spell_in_flight` | 0.538 | 0.773 | 0.466 |
+| **overall** | **mAP50 0.762** | | **mAP50-95 0.504** |
+
+**The gap between those two rows is the point of the whole exercise.** The
+blast is nearly solved at 0.986, and it should be: it is huge, bright and
+sits still for a few frames, which is exactly why a colour threshold could
+label it in the first place. The projectile scores 0.538 with recall under a
+half, because it is a dozen pixels wide, moves the width of itself between
+frames, and crosses a background that is already pink and orange.
+
+So the easy class is easy and the hard class is hard, which is the honest
+result. The model earns its place on the second row, not the first. Missing
+roughly half the in-flight frames still tracks the spell fine in practice,
+because a cast lasts 20 to 30 frames and catching a third of them draws a
+clean path.
+
+![The detector following a cast](output/detector_frames.jpg)
+
+Four frames across one cast: the projectile tagged in flight, then the blast
+tagged on impact as it blooms and fades.
+
 ## How the code processes the video
 
 `spellcycle.py` runs one loop per frame:
@@ -240,10 +268,17 @@ two detections into one actionable number:
   run is auditable without scrubbing the video:
 
 ```
-[ 751.22s] Fireball x21
-[ 756.52s] Fireball x20
-[ 759.66s] Fireball x19
+[ 636.17s] Fireball x9
+[ 653.68s] spell impact #1 on the left tower
+[ 655.29s]   left tower lost 1080 HP over the next 1.6s
+[ 664.03s] Fireball x2
+[ 667.70s] spell impact #2 on the left tower
+[ 669.30s]   left tower lost 0 HP over the next 1.6s
 ```
+
+That second impact reporting zero is honest rather than broken: the tower was
+already at the floor of what the bar can resolve, so there was nothing left
+to measure.
 
 ## When nothing is detected
 
@@ -278,7 +313,10 @@ Built and tested on Python 3.12.1, Windows 11.
 ```bash
 # the demo segment. 4858 is the max tower health in this recording, read off
 # a full enemy bar; without it the program assumes a level 11 tower and warns.
-python spellcycle.py videoplayback.mp4 --start 700 --end 785 --tower-hp 4858
+python spellcycle.py videoplayback.mp4 --start 636 --end 690 --tower-hp 4858
+
+# same thing without the detector, if you would rather not install torch
+python spellcycle.py videoplayback.mp4 --start 636 --end 690 --tower-hp 4858 --no-model
 
 # your own spell levels
 python spellcycle.py match.mp4 --spell-level 14
@@ -324,16 +362,21 @@ Everything in `output/` is committed, produced by the demo command above:
 | File | What it is |
 |---|---|
 | `demo.gif` | the 10 second excerpt shown at the top |
-| `videoplayback_spellcycle.mp4` | the full 85 second annotated clip |
+| `videoplayback_spellcycle.mp4` | the full 54 second annotated clip |
 | `demo_frame.png` | a single annotated frame |
+| `detector_frames.jpg` | four frames across one cast, in flight then impact |
+| `orange_prior.png` | the static-orange map the labeller uses |
+
+The trained weights are committed too, at `models/spell_yolov8n.pt` (6.5 MB),
+so the repository runs without retraining.
 
 The source recording itself is not committed. It is a 68 MB download and the
 repository does not need it to be read, only to be re-run.
 
 ## Verification
 
-The health estimate drives every count, so it was checked against the health
-the game itself prints on the demo segment:
+**The health estimate** drives every count, so it was checked against the
+health the game itself prints, on a frame at 776 seconds:
 
 | Tower | Estimated | Game shows | Error |
 |---|---|---|---|
