@@ -3,16 +3,16 @@
 SPELL CYCLE COUNTER - how many casts to delete the enemy's weakest tower.
 
 Watches a recorded Clash Royale match, reads the enemy princess towers'
-health off their health bars, finds which spells are sitting in your hand,
-and prints a number on each one: how many casts of that spell it takes to
-finish the weakest tower off.
+health straight off the numbers the game prints above their bars, finds
+which spells are sitting in your hand, and draws a number on each one: how
+many casts of that spell it takes to finish the weakest tower off.
 
 Spell damage to a crown tower is guaranteed, so unlike a push the count is
 exact. That is the whole idea behind spell cycling.
 
 Usage:
-    python spellcycle.py videoplayback.mp4 --start 700 --end 790
-    python spellcycle.py match.mp4 --spell-level 14 --tower-hp 4858
+    python spellcycle.py videoplayback.mp4 --start 636 --end 690 --spell-level 16
+    python spellcycle.py match.mp4 --spell-level 11
 """
 from __future__ import annotations
 
@@ -21,18 +21,15 @@ import json
 import math
 import os
 import sys
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
+from digits import BAND, SPAN, DigitReader
 
-# Princess tower max health by level. Level 11 is tournament standard and the
-# default, matching the spell level assumption.
-PRINCESS_HP = {9: 2534, 10: 2786, 11: 3052, 12: 3346, 13: 3668, 14: 4032,
-               15: 4424}
+ROOT = Path(__file__).resolve().parent
 
 
 # --------------------------------------------------------------------------
@@ -70,110 +67,73 @@ class SpellBook:
                 print(f"  note: {name} has no level {level}; using level "
                       f"{near} ({self.damage[name]} damage)")
 
-    def casts_needed(self, spell: str, hp: float) -> int | None:
-        """Casts to take `hp` to zero. None if unknown spell or dead tower."""
+    def casts_needed(self, spell: str, hp) -> int | None:
+        """Casts to take `hp` to zero. None if the spell or the health is
+        unknown, or the tower is already down."""
         dmg = self.damage.get(spell)
-        if not dmg or hp <= 0:
+        if not dmg or hp is None or hp <= 0:
             return None
         return math.ceil(hp / dmg)
 
 
 # --------------------------------------------------------------------------
-# Reading tower health off the bar
+# Tracking a tower's health
 # --------------------------------------------------------------------------
 
 
-class TowerBar:
-    """One enemy princess tower, read from its health bar.
+class Tower:
+    """One enemy princess tower, tracked by reading its printed health.
 
-    The health number the game prints is only about 6 pixels tall in a phone
-    capture, far too small to read reliably, so the bar is measured instead.
-    Fitted against four hand-read values this lands within 0.3%.
+    Any one frame can be misread: a troop walks over the number, the game
+    animates it rolling down after a hit, or the blur on a 7 pixel glyph
+    simply wins. So no single frame is trusted. A value becomes the tower's
+    health only once it is what most of the last half second says, and a
+    reading that claims the tower healed needs a near unanimous window
+    before it is believed, because towers do not heal.
 
-    The bar can be covered by a troop, a spell or a card being dragged over
-    it, so a reading is only accepted when it is believable: towers never
-    heal, and a bar cannot refill. Anything else keeps the last good value.
+    Between confirmations the last confirmed value stands. That is the
+    fallback: the number can vanish behind a spell animation for a second
+    and the count on the cards does not flinch.
     """
 
-    def __init__(self, name: str, roi, max_hp: int, window: int = 15):
+    WINDOW = 9           # frames considered, about a third of a second
+    AGREE = 6            # how many must say the same number
+    SURE = 8             # ...and how many for a reading that looks wrong
+
+    def __init__(self, name: str, x: int):
         self.name = name
-        self.roi = roi
-        self.max_hp = max_hp
-        self.fraction = 1.0
+        self.x = x
+        self.hp = None
         self.alive = True
-        self._recent = deque(maxlen=window)
-        self._misses = 0
-        self.history = deque(maxlen=300)   # (time, hp), for scoring impacts
-        # Until the bar has actually been read once, self.fraction is just the
-        # starting assumption of full health. Anything derived from it before
-        # then is fiction, which is what `seen` guards.
-        self.seen = False
+        self.history = deque(maxlen=300)     # (time, hp), for scoring impacts
+        self._recent = deque(maxlen=self.WINDOW)
+        self._blank = 0
 
-    @property
-    def hp(self) -> float:
-        return self.fraction * self.max_hp
+    def update(self, frame, reader: DigitReader, t: float):
+        strip = frame[BAND[0]:BAND[1], self.x:self.x + SPAN]
+        value, _score = reader.read(strip)
+        self._recent.append(value)
 
-    def update(self, frame, palette):
-        reading = self._read(frame, palette)
-        if reading is None:
-            self._misses += 1
-            # A destroyed tower's bar vanishes for good. Nothing covers a bar
-            # for four straight seconds, so a gap that long means it is gone.
-            if self._misses > 120:
+        if value is None:
+            # A destroyed tower's health number is gone for good. Nothing
+            # covers it for four straight seconds, so a gap that long means
+            # the tower is down rather than hidden.
+            self._blank += 1
+            if self._blank > 120 and self.hp is not None:
                 self.alive = False
-            return
+        else:
+            self._blank = 0
 
-        self._misses = 0
-        self.seen = True
-        self._recent.append(reading)
-
-        # Anything covering the bar can only make the red run look SHORTER
-        # than it is, never longer, so over half a second the largest reading
-        # is the honest one. Combined with the fact that towers never heal,
-        # that makes the estimate monotonic and immune to a troop or a spell
-        # animation parked on top of the bar.
-        best = float(np.max(self._recent))
-        self.fraction = min(self.fraction, best)
-
-        if self.fraction <= 0.005:
-            self.fraction = 0.0
-            self.alive = False
-
-    def _read(self, frame, palette) -> float | None:
-        h, w = frame.shape[:2]
-        x1, y1 = int(self.roi[0] * w), int(self.roi[1] * h)
-        x2, y2 = int(self.roi[2] * w), int(self.roi[3] * h)
-        x1, x2 = max(0, x1), min(w, x2)
-        y1, y2 = max(0, y1), min(h, y2)
-        if x2 - x1 < 8 or y2 - y1 < 2:
-            return None
-
-        hsv = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-        mask = (cv2.inRange(hsv, palette["lo1"], palette["hi1"])
-                | cv2.inRange(hsv, palette["lo2"], palette["hi2"]))
-
-        # A column counts as filled when most of the bar's height is red.
-        filled = (mask > 0).mean(axis=0) >= 0.6
-
-        # Bars drain right to left, so measure the run from the left edge and
-        # stop at the first real gap rather than at one stray dark pixel.
-        run = gap = 0
-        for on in filled:
-            if on:
-                run += 1
-                gap = 0
-            else:
-                gap += 1
-                if gap >= 2:
-                    break
-        # No red at all means the bar is hidden behind a troop or a spell
-        # effect, not that the tower is at zero. A tower that really hits zero
-        # is destroyed and its bar disappears for good, which the miss counter
-        # in update() picks up instead. Reporting 0 here would latch the
-        # tower to empty on the first frame something covered it.
-        if run == 0:
-            return None
-        return min(run, len(filled)) / len(filled)
+        counts = Counter(v for v in self._recent if v is not None)
+        if counts:
+            best, votes = counts.most_common(1)[0]
+            jumped = self.hp is not None and (
+                best > self.hp or abs(best - self.hp) > 0.4 * self.hp)
+            if votes >= (self.SURE if jumped else self.AGREE):
+                self.hp = best
+                if best <= 0:
+                    self.alive = False
+        self.history.append((t, self.hp))
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +145,7 @@ class SpellWatcher:
     """Finds spells in the arena using the fine-tuned YOLOv8n detector.
 
     This is the one part of the program a fixed rectangle cannot do. The hand
-    and the health bars never move, so template matching and a fixed region
+    and the health numbers never move, so template matching and a fixed strip
     are the right tools there. A spell in flight has no fixed position, no
     fixed scale, and crosses whatever happens to be on the board, so it gets
     a detector trained on it. See tools/train_model.py.
@@ -201,8 +161,9 @@ class SpellWatcher:
         try:
             from ultralytics import YOLO
         except ImportError:
-            sys.exit("ERROR: ultralytics is not installed but --model was "
-                     "given. pip install -r requirements.txt")
+            sys.exit("ERROR: ultralytics is not installed but the detector "
+                     "was asked for. pip install -r requirements.txt, or "
+                     "pass --no-model.")
         os.environ.setdefault("YOLO_VERBOSE", "False")
         self.model = YOLO(str(weights))
         self.conf = conf
@@ -289,8 +250,6 @@ class HandReader:
 
 FONT = cv2.FONT_HERSHEY_DUPLEX
 GOLD = (60, 200, 255)
-
-
 DET_COLOURS = {"spell_in_flight": (255, 190, 60), "spell_impact": (80, 90, 255)}
 
 
@@ -326,20 +285,16 @@ def draw_spell(frame, box, spell, casts, s):
                 max(1, int(2 * s)), cv2.LINE_AA)
 
 
-
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 
 
-def load_layout(path: Path) -> dict:
+def load_json(path: Path, hint: str) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        sys.exit(f"ERROR: {path} is missing.\n"
-                 "It holds the on-screen regions for your recording. Run\n"
-                 "    python tools/inspect_frame.py <video> --grid\n"
-                 "and edit a copy of data/layout.example.json to match.")
+        sys.exit(f"ERROR: {path} is missing.\n{hint}")
     except json.JSONDecodeError as exc:
         sys.exit(f"ERROR: {path} is not valid JSON: {exc}")
 
@@ -349,17 +304,20 @@ def main():
         description="Count spell casts needed to delete the weakest enemy tower.")
     p.add_argument("video")
     p.add_argument("--spell-level", type=int, default=11,
-                   help="level of your spells (default 11, tournament standard)")
-    p.add_argument("--tower-hp", type=int, default=None,
-                   help="enemy princess tower max health "
-                        f"(default {PRINCESS_HP[11]}, a level 11 tower)")
+                   help="level of your spells (default 11, tournament "
+                        "standard). The game prints the level under a card's "
+                        "name every time it is played, so you can read it off "
+                        "the clip; videoplayback.mp4 is level 16.")
     p.add_argument("--start", type=float, default=0, help="start second")
     p.add_argument("--end", type=float, default=0, help="end second (0 = all)")
     p.add_argument("--layout", type=Path, default=ROOT / "data" / "layout.json")
     p.add_argument("--spells", type=Path, default=ROOT / "data" / "spells.json")
+    p.add_argument("--digits", type=Path, default=ROOT / "data" / "digits.json")
     p.add_argument("--cards", type=Path, default=ROOT / "cards")
     p.add_argument("--threshold", type=float, default=0.78,
-                   help="card match score to accept a spell (default 0.78). A real spell scores about 0.86-0.92; the best false positive seen was a greyed-out post-match card at 0.72.")
+                   help="card match score to accept a spell (default 0.78). A "
+                        "real spell scores about 0.86-0.92; the best false "
+                        "positive seen was a greyed-out post-match card at 0.72.")
     p.add_argument("--model", type=Path, default=ROOT / "models" / "spell_yolov8n.pt",
                    help="trained spell detector weights")
     p.add_argument("--spell-conf", type=float, default=0.35,
@@ -367,28 +325,33 @@ def main():
     p.add_argument("--no-model", action="store_true",
                    help="skip the arena detector, hand and health only")
     p.add_argument("--every", type=int, default=5,
-                   help="re-read the hand every N frames (default 5)")
+                   help="re-read the hand and run the detector every N frames "
+                        "(default 5). Health is read every frame.")
     p.add_argument("--outdir", type=Path, default=ROOT / "output")
     args = p.parse_args()
 
-    if not 1 <= args.spell_level <= 15:
-        sys.exit("ERROR: --spell-level must be between 1 and 15.")
-    max_hp = args.tower_hp or PRINCESS_HP[11]
-    if max_hp <= 0:
-        sys.exit("ERROR: --tower-hp must be positive.")
+    if not 1 <= args.spell_level <= 16:
+        sys.exit("ERROR: --spell-level must be between 1 and 16.")
 
     video = Path(args.video)
     if not video.exists():
         sys.exit(f"ERROR: no such video: {video}")
 
-    layout = load_layout(args.layout)
+    layout = load_json(args.layout,
+                       "It holds the on-screen regions for your recording. Run\n"
+                       "    python tools/inspect_frame.py <video> --grid\n"
+                       "and edit a copy of data/layout.example.json to match.")
+    if "enemy_hp_text" not in layout:
+        sys.exit(f"ERROR: {args.layout} has no 'enemy_hp_text' section. It "
+                 "names the left edge of each enemy tower's health number.")
+    if not args.digits.exists():
+        sys.exit(f"ERROR: {args.digits} is missing. Build the glyph templates:\n"
+                 f"    python tools/build_digits.py {video}")
+
     book = SpellBook(args.spells, args.spell_level)
+    reader = DigitReader.load(args.digits)
     hand_reader = HandReader(args.cards, list(book.spells), args.threshold)
     args.outdir.mkdir(parents=True, exist_ok=True)
-
-    palette = {k: np.array(layout[v], dtype=np.uint8) for k, v in
-               (("lo1", "red_lo1"), ("hi1", "red_hi1"),
-                ("lo2", "red_lo2"), ("hi2", "red_hi2"))}
 
     watcher = None
     if not args.no_model:
@@ -411,8 +374,7 @@ def main():
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     s = max(0.7, w / 298.0)
 
-    towers = [TowerBar(name, roi, max_hp)
-              for name, roi in layout["enemy_bars"].items()]
+    towers = [Tower(name, int(x)) for name, x in layout["enemy_hp_text"].items()]
     slots = layout["card_slots"]
 
     if args.start > 0:
@@ -426,18 +388,7 @@ def main():
     writer = None
 
     print(f"\n  {video.name}: {w}x{h} @ {fps:.0f} fps")
-    print(f"  Spells at level {args.spell_level}; enemy towers {max_hp} HP max")
-    if args.tower_hp is None:
-        # The bar gives a fraction, so every health figure below is that
-        # fraction of this assumed maximum. Guess the maximum wrong and the
-        # counts are wrong too, with nothing on screen to show it.
-        print("  WARNING: --tower-hp not given, assuming a level 11 tower "
-              f"({max_hp} HP).\n"
-              "           If the recording's towers are a different level "
-              "every health\n"
-              "           figure and cast count below is off. Pass --tower-hp "
-              "with the\n"
-              "           health shown on a full enemy bar to fix it.")
+    print(f"  Spells at level {args.spell_level}")
     print("  Crown tower damage: "
           + ", ".join(f"{n} {d}" for n, d in sorted(book.damage.items())))
     print(f"  Spell table generated {book.generated}\n")
@@ -464,16 +415,14 @@ def main():
                     (frame.shape[1], frame.shape[0]))
 
             for tower in towers:
-                tower.update(frame, palette)
-                tower.history.append((t, tower.hp))
-            alive = [tw for tw in towers if tw.alive]
-            weakest = min(alive, key=lambda tw: tw.hp) if alive else None
+                tower.update(frame, reader, t)
+            known = [tw for tw in towers if tw.alive and tw.hp is not None]
+            weakest = min(known, key=lambda tw: tw.hp) if known else None
 
             if frames % args.every == 0:
                 hand = hand_reader.read(frame, slots)
-
-            if watcher and frames % args.every == 0:
-                dets = watcher.detect(frame)
+                if watcher:
+                    dets = watcher.detect(frame)
 
             for name, box, conf in dets:
                 draw_detection(frame, name, box, conf, s)
@@ -481,9 +430,9 @@ def main():
             # A blast is one cast. Record the tower's health just before it
             # and again once the damage has registered, so the program can
             # check the number it was promising against what actually landed.
-            # Only blasts on the enemy half count. A spell landing on your own
-            # tower is still a spell, but it tells you nothing about the
-            # number this program is drawing on the enemy's health.
+            # Only blasts on the enemy half count: a spell landing on your own
+            # tower is still a spell, but it says nothing about the number
+            # this program is drawing on the enemy's health.
             hit = [d for d in dets if d[0] == SpellWatcher.IMPACT
                    and (d[1][1] + d[1][3]) / 2 < h * 0.47]
             if hit and not impact_on:
@@ -491,9 +440,8 @@ def main():
                 casts_seen += 1
                 bx = (hit[0][1][0] + hit[0][1][2]) / 2
                 side = towers[0] if bx < w / 2 else towers[-1]
-                before = (next((hp for ts, hp in reversed(side.history)
-                                if ts <= t - 0.4), side.hp)
-                          if side.seen else None)
+                before = next((hp for ts, hp in reversed(side.history)
+                               if ts <= t - 0.4 and hp is not None), side.hp)
                 pending.append([t, side, before])
                 print(f"  [{t:7.2f}s] spell impact #{casts_seen} on the "
                       f"{side.name.lower()} tower")
@@ -503,19 +451,19 @@ def main():
             for item in pending[:]:
                 if t - item[0] >= 1.6:
                     _, side, before = item
-                    if before is None:
+                    if before is None or side.hp is None:
                         print(f"  [{t:7.2f}s]   not measurable, that tower's "
-                              "health was not established yet")
+                              "health was not readable")
                     elif not side.alive:
                         print(f"  [{t:7.2f}s]   {side.name.lower()} tower "
                               "went down")
                     else:
                         # Deliberately not called "the spell's damage": this
-                        # is every point the tower lost in the window, so any
+                        # is every point the tower lost in the window, so a
                         # troop hitting it at the same time is counted too.
-                        print(f"  [{t:7.2f}s]   {side.name.lower()} tower lost "
-                              f"{int(round(before - side.hp))} HP over the "
-                              "next 1.6s")
+                        print(f"  [{t:7.2f}s]   {side.name.lower()} tower "
+                              f"{before} -> {side.hp}, lost "
+                              f"{before - side.hp} HP over 1.6s")
                     pending.remove(item)
 
             for _slot, spell, box, _score in hand:
@@ -525,9 +473,9 @@ def main():
             writer.write(frame)
 
             if weakest and hand:
-                line = ",  ".join(
-                    f"{sp} x{book.casts_needed(sp, weakest.hp)}"
-                    for _i, sp, _b, _sc in hand)
+                line = (f"weakest {weakest.name.lower()} {weakest.hp} HP:  "
+                        + ",  ".join(f"{sp} x{book.casts_needed(sp, weakest.hp)}"
+                                     for _i, sp, _b, _sc in hand))
                 if line != last_line:
                     print(f"  [{t:7.2f}s] {line}")
                     last_line = line
@@ -546,8 +494,10 @@ def main():
 
     print(f"\n  Saved {out_path}  ({frames} frames)")
     if last_line is None:
-        print("  No spells matched in the hand. Lower --threshold, or check "
-              "card_slots in the layout file.")
+        print("  Nothing was counted. Either no spell matched in the hand "
+              "(lower --threshold, or check card_slots in the layout file) or "
+              "no tower's health could be read (check enemy_hp_text, and "
+              "rebuild the glyphs with tools/build_digits.py).")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
-  "_comment": "Calibrated for videoplayback.mp4 (298x640 portrait phone capture). All values are fractions of frame width/height: [x1, y1, x2, y2]. Re-run tools/inspect_frame.py and tools/calibrate.py for a different recording.",
+  "_comment": "Calibrated for videoplayback.mp4, a 298x640 portrait phone capture. Run tools/inspect_frame.py <video> --grid on a different recording and re-measure.",
 
-  "_slots_comment": "The four cards in hand, left to right. Excludes the 'Next:' card and the elixir bar.",
+  "_slots_comment": "The four cards in hand, left to right, as fractions of frame width and height: [x1, y1, x2, y2]. Excludes the 'Next' card and the elixir bar.",
   "card_slots": [
     [0.2248, 0.8281, 0.4027, 0.9437],
     [0.4161, 0.8281, 0.5940, 0.9437],
@@ -9,15 +9,9 @@
     [0.7785, 0.8281, 0.9564, 0.9437]
   ],
 
-  "_bars_comment": "The enemy princess tower health bars, tight to the coloured strip. Fitted against four hand-read health values; the implied max health came out within 0.3% on both towers.",
-  "enemy_bars": {
-    "Left":  [0.1678, 0.2016, 0.2919, 0.2094],
-    "Right": [0.7450, 0.2016, 0.8691, 0.2094]
-  },
-
-  "_colour_comment": "HSV bounds for the enemy bar red. OpenCV hue is 0-179 so red needs two ranges, one at each end.",
-  "red_lo1": [0, 110, 90],
-  "red_hi1": [12, 255, 255],
-  "red_lo2": [165, 110, 90],
-  "red_hi2": [179, 255, 255]
+  "_hp_text_comment": "Left edge, in source pixels, of the strip holding each enemy tower's health number. The few columns of margin before the digits are deliberate: the HUD shifts a pixel or two between matches and the reader locates the number inside the strip. The rows it searches are fixed in digits.py.",
+  "enemy_hp_text": {
+    "Left": 47,
+    "Right": 221
+  }
 }

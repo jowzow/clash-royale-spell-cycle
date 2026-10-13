@@ -1,0 +1,48 @@
+{
+  "_comment": "Health numbers read off videoplayback.mp4 by eye, by zooming each strip to 10x. 'use' says whether a row is allowed to contribute glyph templates; rows marked 'test' are never used for building, so the accuracy tools/build_digits.py prints is measured on numbers the templates have never seen. Values are [seconds, left tower, right tower].",
+
+  "_segments": {
+    "early": "A match around 120-185s and another around 390-510s. This part of the recording is visibly softer than the rest, which is why the reader does worse here; see the README.",
+    "demo": "The match at 596-682s, which is the one the demo runs on."
+  },
+
+  "frames": [
+    {"t": 120, "left": "4605", "right": "4858", "use": "train", "seg": "early"},
+    {"t": 130, "left": "4605", "right": "4858", "use": "test",  "seg": "early"},
+    {"t": 140, "left": "4205", "right": "3382", "use": "train", "seg": "early"},
+    {"t": 150, "left": "3580", "right": "3382", "use": "test",  "seg": "early"},
+    {"t": 160, "left": "2130", "right": "2527", "use": "test",  "seg": "early"},
+    {"t": 170, "left": "1583", "right": "2527", "use": "train", "seg": "early"},
+    {"t": 175, "left": "1583", "right": "2527", "use": "test",  "seg": "early"},
+    {"t": 180, "left": "1330", "right": "2527", "use": "train", "seg": "early"},
+    {"t": 185, "left": "905",  "right": "1672", "use": "train", "seg": "early"},
+    {"t": 390, "left": "4858", "right": "4858", "use": "test",  "seg": "early"},
+    {"t": 420, "left": "4105", "right": "4858", "use": "test",  "seg": "early"},
+    {"t": 450, "left": "4105", "right": "4658", "use": "train", "seg": "early"},
+    {"t": 480, "left": "4105", "right": "4658", "use": "test",  "seg": "early"},
+    {"t": 510, "left": "4105", "right": "3762", "use": "test",  "seg": "early"},
+
+    {"t": 600, "left": "3325", "right": "3762", "use": "train", "seg": "demo"},
+    {"t": 606, "left": "3325", "right": "3762", "use": "test",  "seg": "demo"},
+    {"t": 612, "left": "3325", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 618, "left": "3325", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 624, "left": "3325", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 630, "left": "3325", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 636, "left": "3325", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 640, "left": "3325", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 642, "left": "3325", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 645, "left": "2935", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 648, "left": "2805", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 650, "left": "2805", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 652, "left": "2805", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 656, "left": "2552", "right": "3476", "use": "train", "seg": "demo"},
+    {"t": 660, "left": "2552", "right": "3476", "use": "test",  "seg": "demo"},
+    {"t": 662, "left": "2552", "right": "3276", "use": "train", "seg": "demo"},
+    {"t": 668, "left": "2299", "right": "3276", "use": "test",  "seg": "demo"},
+    {"t": 670, "left": "2299", "right": "3276", "use": "train", "seg": "demo"},
+    {"t": 672, "left": "2299", "right": "3276", "use": "test",  "seg": "demo"},
+    {"t": 676, "left": "2299", "right": "3276", "use": "test",  "seg": "demo"},
+    {"t": 679, "left": "239",  "right": "1276", "use": "train", "seg": "demo"},
+    {"t": 680, "left": "19",   "right": "996",  "use": "test",  "seg": "demo"}
+  ]
+}

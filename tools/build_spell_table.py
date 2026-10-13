@@ -3,8 +3,8 @@
 Regenerates data/spells.json, the crown tower damage table.
 
 Why this script exists: Clash Royale rebalances spells constantly, so the
-damage numbers must be derivable and dated rather than typed in by hand and
-forgotten. Run it again after a balance patch and edit CURRENT_L11 below.
+damage numbers have to be derivable and dated rather than typed in by hand
+and forgotten. Run it again after a balance patch.
 
 HOW THE NUMBERS ARE DERIVED
 ---------------------------
@@ -12,33 +12,49 @@ Supercell's own per-level damage arrays come from RoyaleAPI's cr-api-data
 mirror of the game files. Two things about those arrays are not obvious:
 
 1. They are indexed by a card's *internal* level, not its displayed level.
-   The array length encodes rarity, because every rarity tops out at the same
-   internal level but starts at a different one:
+   The array length encodes rarity, because every rarity tops out at the
+   same internal level but starts at a different one:
 
        Common    19 entries, starts at displayed level 1
        Rare      17 entries, starts at displayed level 3
        Epic      14 entries, starts at displayed level 6
        Legendary 11 entries, starts at displayed level 9
 
-   So index = displayed_level - MIN_LEVEL[rarity].
+   So index = displayed_level - MIN_LEVEL[rarity]. Checked against the two
+   Fireball figures everyone publishes: level 9 is 572 area damage and level
+   11 is 689. Both land exactly where the rule says they should.
 
 2. `crown_tower_damage_percent` is a *reduction*, stored negative. A Fireball
-   at -70 deals 30% of its area damage to a Crown Tower.
+   at -70 is documented as doing 30% of its area damage to a crown tower.
 
-Both rules were verified against two independently published values:
-   Fireball level 11 -> 689 area damage, 207 crown tower damage
-   Rocket   level 11 -> 1484 area damage, 371 crown tower damage
-Both reproduce exactly, which is why the indexing is trusted.
+Rule 2 does not survive contact with the footage. A level 16 Fireball has
+1101 area damage, so 30% would be 330, but in videoplayback.mp4 two separate
+level 16 Fireballs each take exactly 253 off an enemy princess tower:
 
-The mirror itself was last updated in 2023, so its crown tower numbers are
-pre-2026. The June 2026 balance patch cut the crown tower damage of twelve
-spells, and September 2026 cut Fireball again. CURRENT_L11 below holds the
-post-patch level 11 values; everything else is scaled from them using the
-game's own per-level damage ratios, which preserves exact level scaling
-without inventing anything.
+    653.9s   left tower 2805 -> 2552
+    668.0s   left tower 2552 -> 2299
+
+253 / (1101 x 0.30) = 0.766. The game data hints at why: the Fireball record
+carries `deflect_behaviour: UseSpellsTowerDamageMul`, which implies a global
+spell-versus-tower multiplier living somewhere outside the per-card record.
+Rather than guess at it, this script fits that single factor to the one
+number the recording actually lets it measure, then applies it everywhere.
+
+WHAT THAT MEANS FOR TRUST
+-------------------------
+Fireball is anchored on a measurement, seen twice. Every other spell
+inherits the same global factor, which is only right if the factor really is
+global. If Supercell instead changed Fireball's own percentage, the other
+six are off by that 0.766. They are marked "verified": false for exactly
+that reason, and the README says the same thing.
+
+Usage:
+    python tools/build_spell_table.py
+    python tools/build_spell_table.py --stats cards_stats.json   # offline
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import urllib.request
@@ -47,6 +63,7 @@ from pathlib import Path
 STATS_URL = "https://royaleapi.github.io/cr-api-data/json/cards_stats.json"
 
 MIN_LEVEL = {"Common": 1, "Rare": 3, "Epic": 6, "Legendary": 9}
+LEVELS_FOR = {"Common": 19, "Rare": 17, "Epic": 14, "Legendary": 11}
 
 # card name -> (entity name in cards_stats.json, section, rarity, elixir)
 SPELLS = {
@@ -59,95 +76,115 @@ SPELLS = {
     "Giant Snowball": ("SnowballSpell",        "projectile", "Common",    2),
 }
 
-# Crown tower damage at level 11 after the 2026 balance patches.
-#   verified=True  -> the post-patch number itself is published
-#   verified=False -> published pre-patch value with the published percentage
-#                     cut applied, so it can be off by a point of rounding
-CURRENT_L11 = {
-    "Rocket":         (343, True,  "June 2026: -8% crown tower damage"),
-    "Fireball":       (159, True,  "June 2026 -17%, then September 2026 again"),
-    "Lightning":      (295, False, "June 2026: -7% applied to 317"),
-    "Arrows":         (30,  False, "June 2026: -19% applied to 37"),
-    "The Log":        (49,  False, "June 2026: -15% applied to 58"),
-    "Zap":            (48,  False, "June 2026: -17% applied to 58"),
-    "Giant Snowball": (48,  False, "June 2026: -17% applied to 58"),
+# The one crown tower damage figure this project can check against footage.
+MEASURED = {
+    "card": "Fireball",
+    "level": 16,
+    "crown_damage": 253,
+    "seen": ["653.9s  left tower 2805 -> 2552",
+             "668.0s  left tower 2552 -> 2299"],
 }
 
-MAX_DISPLAY_LEVEL = 15
+MAX_DISPLAY_LEVEL = 16
 
 
-def fetch_stats() -> dict:
+def fetch_stats(local):
+    if local:
+        print(f"  reading {local}")
+        return json.loads(Path(local).read_text(encoding="utf-8"))
     print(f"  downloading {STATS_URL}")
     with urllib.request.urlopen(STATS_URL, timeout=120) as fh:
         return json.loads(fh.read().decode("utf-8"))
 
 
-def build() -> dict:
-    stats = fetch_stats()
+def build(stats):
     index = {}
     for section in ("spell", "projectile"):
         for entry in stats.get(section, []):
             index[(section, entry.get("name"))] = entry
 
-    out = {}
-    for card, (entity, section, rarity, elixir) in SPELLS.items():
+    def record(card):
+        entity, section, rarity, elixir = SPELLS[card]
         entry = index.get((section, entity))
         if entry is None:
-            sys.exit(f"ERROR: {entity} missing from the stats dump.")
-
+            sys.exit(f"ERROR: {entity} is missing from the stats dump. The "
+                     "upstream entity names may have changed.")
         damage = entry.get("damage_per_level") or []
-        expected = {"Common": 19, "Rare": 17, "Epic": 14, "Legendary": 11}
-        if len(damage) != expected[rarity]:
+        if len(damage) != LEVELS_FOR[rarity]:
             print(f"  WARNING: {card} has {len(damage)} levels, expected "
-                  f"{expected[rarity]} for {rarity}. Rarity rule may have "
-                  f"changed upstream.")
+                  f"{LEVELS_FOR[rarity]} for {rarity}. The rarity rule may "
+                  "have changed upstream.")
+        pct = entry.get("crown_tower_damage_percent")
+        if pct is None:
+            sys.exit(f"ERROR: {card} has no crown_tower_damage_percent.")
+        return rarity, elixir, damage, (100 + pct) / 100.0
 
+    rarity, _elixir, damage, share = record(MEASURED["card"])
+    i = MEASURED["level"] - MIN_LEVEL[rarity]
+    if not 0 <= i < len(damage):
+        sys.exit(f"ERROR: {MEASURED['card']} has no level {MEASURED['level']}.")
+    factor = MEASURED["crown_damage"] / (damage[i] * share)
+    print(f"  global spell-vs-tower factor fitted to the footage: {factor:.4f}"
+          f"\n    ({MEASURED['card']} level {MEASURED['level']}: {damage[i]}"
+          f" area x {share:.2f} x {factor:.4f} = {MEASURED['crown_damage']})")
+
+    out = {}
+    for card in SPELLS:
+        rarity, elixir, damage, share = record(card)
         lo = MIN_LEVEL[rarity]
-        i11 = 11 - lo
-        if not 0 <= i11 < len(damage):
-            sys.exit(f"ERROR: {card} has no level 11 entry.")
-
-        ct11, verified, note = CURRENT_L11[card]
-        # Anchor on the verified level 11 value and scale by the game's own
-        # damage ratios, so every other level keeps exact in-game scaling.
         per_level = {}
-        for i, dmg in enumerate(damage):
-            level = i + lo
+        for idx, area in enumerate(damage):
+            level = idx + lo
             if level > MAX_DISPLAY_LEVEL:
                 break
-            per_level[str(level)] = round(ct11 * dmg / damage[i11])
-
+            per_level[str(level)] = round(area * share * factor)
+        measured = card == MEASURED["card"]
         out[card] = {
             "elixir": elixir,
             "rarity": rarity,
             "min_level": lo,
             "crown_tower_damage": per_level,
-            "area_damage_level_11": damage[i11],
-            "verified": verified,
-            "note": note,
+            "percent_of_area_damage": round(share * factor * 100, 1),
+            "verified": measured,
+            "note": ("measured in videoplayback.mp4: "
+                     + "; ".join(MEASURED["seen"])) if measured else
+                    ("derived: the game's own per-level damage times this "
+                     "card's crown tower percentage times the global factor "
+                     "fitted on Fireball. Not checked against footage."),
         }
-        print(f"  {card:15s} L11 crown tower damage = {per_level['11']:4d}"
-              f"   {'verified' if verified else 'derived'}")
-    return out
+        print(f"  {card:15s} level 11 {per_level.get('11', '-'):>5}   "
+              f"level 16 {per_level.get('16', '-'):>5}   "
+              f"{'measured' if measured else 'derived'}")
+    return out, factor
 
 
 def main():
+    here = Path(__file__).resolve().parent.parent
+    p = argparse.ArgumentParser()
+    p.add_argument("--stats", default=None,
+                   help="a local copy of cards_stats.json instead of fetching")
+    p.add_argument("--out", type=Path, default=here / "data" / "spells.json")
+    args = p.parse_args()
+
+    spells, factor = build(fetch_stats(args.stats))
     table = {
         "_source": STATS_URL,
         "_generated": "2026-10-12",
-        "_balance": "Reflects the June 2026 and September 2026 spell patches.",
         "_readme": "Crown tower damage only. These are NOT area damage values.",
+        "_anchor": (f"The global spell-vs-tower factor is {factor:.4f}, fitted "
+                    f"so a level {MEASURED['level']} {MEASURED['card']} comes "
+                    f"out at {MEASURED['crown_damage']}, which is what it does "
+                    "twice in videoplayback.mp4. See tools/build_spell_table.py."),
         "_excluded": {
             "Poison": "damage over time, does not reduce to a cast count",
             "Earthquake": "damage over time, does not reduce to a cast count",
             "Tornado": "deals no meaningful crown tower damage",
         },
-        "spells": build(),
+        "spells": spells,
     }
-    out = Path(__file__).resolve().parent.parent / "data" / "spells.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(table, indent=2), encoding="utf-8")
-    print(f"\n  Wrote {out}")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(table, indent=2) + "\n", encoding="utf-8")
+    print(f"\n  Wrote {args.out}")
 
 
 if __name__ == "__main__":
